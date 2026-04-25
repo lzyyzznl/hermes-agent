@@ -617,6 +617,17 @@ def _format_gateway_process_notification(evt: dict) -> "str | None":
     return None
 
 
+# Module-level reference to the active gateway runner so that tools (e.g.
+# send_message) can reuse existing platform adapters instead of creating
+# duplicate connections that would kick the gateway's long-lived session.
+_active_runner: Optional["GatewayRunner"] = None
+
+
+def get_gateway_runner() -> Optional["GatewayRunner"]:
+    """Return the active GatewayRunner instance (or None if not running)."""
+    return _active_runner
+
+
 class GatewayRunner:
     """
     Main gateway controller.
@@ -2225,6 +2236,8 @@ class GatewayRunner:
         self.delivery_router.adapters = self.adapters
         
         self._running = True
+        global _active_runner
+        _active_runner = self
         self._update_runtime_status("running")
         
         # Emit gateway:startup hook
@@ -2635,6 +2648,9 @@ class GatewayRunner:
                 " for restart" if self._restart_requested else "",
             )
             self._running = False
+            global _active_runner
+            if _active_runner is self:
+                _active_runner = None
             self._draining = True
 
             # Notify all chats with active agents BEFORE draining.
@@ -2959,6 +2975,13 @@ class GatewayRunner:
                 return None
             return QQAdapter(config)
 
+        elif platform == Platform.ICENTER:
+            from gateway.platforms.icenter import ICenterAdapter, check_icenter_requirements
+            if not check_icenter_requirements():
+                logger.warning("iCenter: aiohttp not installed or ICENTER_SECRET_KEY not set")
+                return None
+            return ICenterAdapter(config)
+
         return None
 
     def _is_user_authorized(self, source: SessionSource) -> bool:
@@ -3001,6 +3024,7 @@ class GatewayRunner:
             Platform.WEIXIN: "WEIXIN_ALLOWED_USERS",
             Platform.BLUEBUBBLES: "BLUEBUBBLES_ALLOWED_USERS",
             Platform.QQBOT: "QQ_ALLOWED_USERS",
+            Platform.ICENTER: "ICENTER_ALLOWED_USERS",
         }
         platform_group_env_map = {
             Platform.TELEGRAM: "TELEGRAM_GROUP_ALLOWED_USERS",
@@ -3023,6 +3047,7 @@ class GatewayRunner:
             Platform.WEIXIN: "WEIXIN_ALLOW_ALL_USERS",
             Platform.BLUEBUBBLES: "BLUEBUBBLES_ALLOW_ALL_USERS",
             Platform.QQBOT: "QQ_ALLOW_ALL_USERS",
+            Platform.ICENTER: "ICENTER_ALLOW_ALL_USERS",
         }
 
         # Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
@@ -4502,7 +4527,9 @@ class GatewayRunner:
         
         # One-time prompt if no home channel is set for this platform
         # Skip for webhooks - they deliver directly to configured targets (github_comment, etc.)
-        if not history and source.platform and source.platform != Platform.LOCAL and source.platform != Platform.WEBHOOK:
+        # iCenter: home channel is always available (hardcoded default in config.py)
+        _skip_home_prompt = {Platform.LOCAL, Platform.WEBHOOK, Platform.ICENTER}
+        if not history and source.platform and source.platform not in _skip_home_prompt:
             platform_name = source.platform.value
             env_key = f"{platform_name.upper()}_HOME_CHANNEL"
             if not os.getenv(env_key):
@@ -7736,7 +7763,7 @@ class GatewayRunner:
         Platform.TELEGRAM, Platform.DISCORD, Platform.SLACK, Platform.WHATSAPP,
         Platform.SIGNAL, Platform.MATTERMOST, Platform.MATRIX,
         Platform.HOMEASSISTANT, Platform.EMAIL, Platform.SMS, Platform.DINGTALK,
-        Platform.FEISHU, Platform.WECOM, Platform.WECOM_CALLBACK, Platform.WEIXIN, Platform.BLUEBUBBLES, Platform.QQBOT, Platform.LOCAL,
+        Platform.FEISHU, Platform.WECOM, Platform.WECOM_CALLBACK, Platform.WEIXIN, Platform.BLUEBUBBLES, Platform.QQBOT, Platform.ICENTER, Platform.LOCAL,
     })
 
     async def _handle_debug_command(self, event: MessageEvent) -> str:

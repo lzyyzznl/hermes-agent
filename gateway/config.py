@@ -67,6 +67,7 @@ class Platform(Enum):
     WEIXIN = "weixin"
     BLUEBUBBLES = "bluebubbles"
     QQBOT = "qqbot"
+    ICENTER = "icenter"
 
 
 @dataclass
@@ -313,6 +314,9 @@ class GatewayConfig:
                 connected.append(platform)
             # QQBot uses extra dict for app credentials
             elif platform == Platform.QQBOT and config.extra.get("app_id") and config.extra.get("client_secret"):
+                connected.append(platform)
+            # iCenter uses secret_key for WebSocket authentication
+            elif platform == Platform.ICENTER and config.extra.get("secret_key"):
                 connected.append(platform)
             # DingTalk uses client_id/client_secret from config.extra or env vars
             elif platform == Platform.DINGTALK and (
@@ -761,6 +765,28 @@ def load_gateway_config() -> GatewayConfig:
                     os.environ["MATRIX_AUTO_THREAD"] = str(matrix_cfg["auto_thread"]).lower()
                 if "dm_mention_threads" in matrix_cfg and not os.getenv("MATRIX_DM_MENTION_THREADS"):
                     os.environ["MATRIX_DM_MENTION_THREADS"] = str(matrix_cfg["dm_mention_threads"]).lower()
+
+                # iCenter settings from config.yaml → env vars (env vars take precedence)
+                icenter_cfg = yaml_cfg.get("icenter", {})
+                if isinstance(icenter_cfg, dict):
+                    icenter_allowed_users = icenter_cfg.get("allowed_users")
+                    if icenter_allowed_users is not None and not os.getenv("ICENTER_ALLOWED_USERS"):
+                        if isinstance(icenter_allowed_users, list):
+                            icenter_allowed_users = ",".join(str(v) for v in icenter_allowed_users)
+                        os.environ["ICENTER_ALLOWED_USERS"] = str(icenter_allowed_users)
+                    icenter_allow_all = icenter_cfg.get("allow_all_users")
+                    if icenter_allow_all is not None and not os.getenv("ICENTER_ALLOW_ALL_USERS"):
+                        os.environ["ICENTER_ALLOW_ALL_USERS"] = str(icenter_allow_all).lower()
+                    icenter_home = icenter_cfg.get("home_channel")
+                    if icenter_home and not os.getenv("ICENTER_HOME_CHANNEL"):
+                        os.environ["ICENTER_HOME_CHANNEL"] = str(icenter_home).strip()
+                # Bridge top-level ICENTER_HOME_CHANNEL from config.yaml
+                _icenter_home_top = yaml_cfg.get("ICENTER_HOME_CHANNEL")
+                if _icenter_home_top and not os.getenv("ICENTER_HOME_CHANNEL"):
+                    os.environ["ICENTER_HOME_CHANNEL"] = str(_icenter_home_top).strip()
+                # Default: msgType="cron" routes to bot owner regardless of chatUuid
+                if not os.getenv("ICENTER_HOME_CHANNEL"):
+                    os.environ["ICENTER_HOME_CHANNEL"] = "icenter"
 
     except Exception as e:
         logger.warning(
@@ -1274,6 +1300,32 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                 platform=Platform.QQBOT,
                 chat_id=qq_home,
                 name=os.getenv("QQBOT_HOME_CHANNEL_NAME") or os.getenv(qq_home_name_env, "Home"),
+            )
+
+    # iCenter (ZTE enterprise messaging)
+    # Requires ICENTER_ENABLED=true to activate (matches WhatsApp/API Server pattern)
+    icenter_enabled = os.getenv("ICENTER_ENABLED", "").lower() in ("true", "1", "yes")
+    icenter_secret_key = os.getenv("ICENTER_SECRET_KEY")
+    _icenter_cli_uac = os.path.join(os.path.dirname(__file__), "platforms", "cli-uac")
+    _icenter_available = icenter_enabled and (bool(icenter_secret_key) or os.path.isfile(_icenter_cli_uac))
+    if _icenter_available:
+        if Platform.ICENTER not in config.platforms:
+            config.platforms[Platform.ICENTER] = PlatformConfig()
+        config.platforms[Platform.ICENTER].enabled = True
+        extra = config.platforms[Platform.ICENTER].extra
+        extra["secret_key"] = icenter_secret_key
+        icenter_ws_url = os.getenv("ICENTER_WEBSOCKET_URL")
+        if icenter_ws_url:
+            extra["websocket_url"] = icenter_ws_url
+        icenter_account_id = os.getenv("ICENTER_ACCOUNT_ID")
+        if icenter_account_id:
+            extra["account_id"] = icenter_account_id
+        icenter_home = os.getenv("ICENTER_HOME_CHANNEL", "").strip()
+        if icenter_home:
+            config.platforms[Platform.ICENTER].home_channel = HomeChannel(
+                platform=Platform.ICENTER,
+                chat_id=icenter_home,
+                name=os.getenv("ICENTER_HOME_CHANNEL_NAME", "Home"),
             )
 
     # Session settings

@@ -215,6 +215,7 @@ def _handle_send(args):
         "weixin": Platform.WEIXIN,
         "email": Platform.EMAIL,
         "sms": Platform.SMS,
+        "icenter": Platform.ICENTER,
     }
     platform = platform_map.get(platform_name)
     if not platform:
@@ -332,6 +333,9 @@ def _parse_target_ref(platform_name: str, target_ref: str):
         return target_ref, None, True
     # Matrix room IDs (start with !) and user IDs (start with @) are explicit
     if platform_name == "matrix" and (target_ref.startswith("!") or target_ref.startswith("@")):
+        return target_ref, None, True
+    # iCenter uses hex UUIDs as chat IDs (e.g. c8d063e4de379abeaa35c69f896b3e3b)
+    if platform_name == "icenter" and re.match(r"^[0-9a-f]{16,64}$", target_ref, re.IGNORECASE):
         return target_ref, None, True
     return None, None, False
 
@@ -571,6 +575,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             result = await _send_bluebubbles(pconfig.extra, chat_id, chunk)
         elif platform == Platform.QQBOT:
             result = await _send_qqbot(pconfig, chat_id, chunk)
+        elif platform == Platform.ICENTER:
+            result = await _send_icenter(pconfig, chat_id, chunk)
         else:
             result = {"error": f"Direct sending not yet implemented for {platform.value}"}
 
@@ -1508,6 +1514,58 @@ async def _send_qqbot(pconfig, chat_id, message):
                 return _error(f"QQBot send failed: {resp.status_code} {resp.text}")
     except Exception as e:
         return _error(f"QQBot send failed: {e}")
+
+
+async def _send_icenter(pconfig, chat_id, message):
+    """Send via iCenter — reuses the gateway's live WebSocket when available.
+
+    Creating a second WebSocket with the same secretKey disconnects the
+    gateway's long-lived connection, so we MUST prefer the existing adapter.
+    A new connection is only created as a fallback when no gateway is running.
+    """
+    try:
+        from gateway.platforms.icenter import ICenterAdapter
+        from gateway.config import Platform
+    except ImportError:
+        return _error("iCenter adapter not available")
+
+    try:
+        # Try to reuse the gateway's running adapter
+        try:
+            from gateway.run import get_gateway_runner
+            runner = get_gateway_runner()
+            if runner:
+                adapter = runner.adapters.get(Platform.ICENTER)
+                if adapter and adapter._connected:
+                    result = await adapter.send(chat_id, message, metadata={"_standalone": True})
+                    if not result.success:
+                        return _error(f"iCenter send failed: {result.error}")
+                    return {
+                        "success": True,
+                        "platform": "icenter",
+                        "chat_id": chat_id,
+                    }
+        except Exception:
+            pass  # Gateway not running or adapter unavailable — fall through
+
+        # Fallback: create a standalone connection (CLI / cron context)
+        adapter = ICenterAdapter(pconfig)
+        connected = await adapter.connect()
+        if not connected:
+            return _error("iCenter: failed to connect")
+        try:
+            result = await adapter.send(chat_id, message, metadata={"_standalone": True})
+            if not result.success:
+                return _error(f"iCenter send failed: {result.error}")
+            return {
+                "success": True,
+                "platform": "icenter",
+                "chat_id": chat_id,
+            }
+        finally:
+            await adapter.disconnect()
+    except Exception as e:
+        return _error(f"iCenter send failed: {e}")
 
 
 # --- Registry ---

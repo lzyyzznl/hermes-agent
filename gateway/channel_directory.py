@@ -8,6 +8,7 @@ action="list" and for resolving human-friendly channel names to numeric IDs.
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -73,6 +74,8 @@ def build_channel_directory(adapters: Dict[Any, Any]) -> Dict[str, Any]:
                 platforms["discord"] = _build_discord(adapter)
             elif platform == Platform.SLACK:
                 platforms["slack"] = _build_slack(adapter)
+            elif platform == Platform.ICENTER:
+                platforms["icenter"] = _build_icenter(adapter)
         except Exception as e:
             logger.warning("Channel directory: failed to build %s: %s", platform.value, e)
 
@@ -151,6 +154,23 @@ def _build_slack(adapter) -> List[Dict[str, str]]:
 
     # Fallback to session data
     return _build_from_sessions("slack")
+
+
+def _build_icenter(adapter) -> List[Dict[str, str]]:
+    """Build iCenter channel list from adapter + sessions + home channel config."""
+    channels = _build_from_sessions("icenter")
+
+    home_chat_id = os.getenv("ICENTER_HOME_CHANNEL", "").strip()
+    if home_chat_id:
+        seen = {ch["id"] for ch in channels}
+        if home_chat_id not in seen:
+            channels.append({
+                "id": home_chat_id,
+                "name": "iCenter Home",
+                "type": "dm",
+            })
+
+    return channels
 
 
 def _build_from_sessions(platform_name: str) -> List[Dict[str, str]]:

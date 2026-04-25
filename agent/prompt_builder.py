@@ -404,6 +404,12 @@ PLATFORM_HINTS = {
         "documents. You can also include image URLs in markdown format ![alt](url) and they "
         "will be downloaded and sent as native media when possible."
     ),
+    "icenter": (
+        "You are on iCenter, ZTE's internal enterprise messaging platform. "
+        "Markdown formatting is supported. "
+        "When addressing users, use their employee number (digitalEmpNo) for targeting. "
+        "iCenter supports both direct messages and group conversations."
+    ),
     "wecom": (
         "You are on WeCom (企业微信 / Enterprise WeChat). Markdown formatting is supported. "
         "You CAN send media files natively — to deliver a file to the user, include "
