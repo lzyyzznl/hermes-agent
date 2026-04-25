@@ -359,6 +359,11 @@ class ICenterAdapter(BasePlatformAdapter):
             logger.error("[iCenter] Receive loop error: %s", exc, exc_info=True)
         finally:
             self._connected = False
+            try:
+                from gateway.status import write_runtime_status
+                write_runtime_status(platform="icenter", platform_state="disconnected")
+            except Exception:
+                pass
             if self._running:
                 await self._schedule_reconnect()
 
@@ -464,6 +469,11 @@ class ICenterAdapter(BasePlatformAdapter):
         self._is_reconnecting = True
 
         try:
+            try:
+                from gateway.status import write_runtime_status
+                write_runtime_status(platform="icenter", platform_state="reconnecting")
+            except Exception:
+                pass
             # Cancel old tasks
             for task in (self._receive_task,):
                 if task and not task.done():
@@ -491,6 +501,7 @@ class ICenterAdapter(BasePlatformAdapter):
                 attempt += 1
                 try:
                     await self._connect_once()
+                    self._mark_connected()
                     logger.info("[iCenter] Reconnected successfully (attempt %d)", attempt)
                     return
                 except Exception as exc:
